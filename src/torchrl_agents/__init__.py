@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import field
+from dataclasses import MISSING, field
 from pathlib import Path
 import torch
 from tensordict.nn import TensorDictModuleBase
@@ -12,29 +12,32 @@ T = TypeVar("T", bound="Agent")
 
 
 def field_with_metadata(
-    field_type: str, default=None, default_factory=None, init: bool = True
+    field_type: str, default=MISSING, default_factory=MISSING, init: bool = True
 ):
     """Create a dataclass field with metadata."""
+    if default is not MISSING and default_factory is not MISSING:
+        raise ValueError("Cannot specify both default and default_factory")
     metadata = {"type": field_type}
-    if default is not None:
+    # If default is provided, prefer it over default_factory
+    if default is not MISSING:
         return field(default=default, init=init, metadata=metadata)
-    elif default_factory is not None:
+    elif default_factory is not MISSING:
         return field(default_factory=default_factory, init=init, metadata=metadata)
     else:
         return field(init=init, metadata=metadata)
 
 
-def serializable(default=None, default_factory=None, init: bool = True):
+def serializable(default=MISSING, default_factory=MISSING, init: bool = True):
     """Mark a field as serializable (saved to params.yml)."""
     return field_with_metadata("serializable", default, default_factory, init)
 
 
-def weights(default=None, default_factory=None, init: bool = False):
+def weights(default=MISSING, default_factory=MISSING, init: bool = False):
     """Mark a field as containing model weights (saved to model.pt)."""
     return field_with_metadata("weights", default, default_factory, init)
 
 
-def unserializable(default=None, default_factory=None, init: bool = True):
+def unserializable(default=MISSING, default_factory=MISSING, init: bool = True):
     """Mark a field as unserializable (saved to extra.pt)."""
     return field_with_metadata("unserializable", default, default_factory, init)
 

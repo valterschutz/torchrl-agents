@@ -24,7 +24,7 @@ class DQNAgent(Agent, ABC):
 
     _device: torch.device = unserializable(default_factory=lambda: torch.device("cpu"))
 
-    action_mask_key: str|None = serializable(None)
+    action_mask_key: str | None = serializable(None)
 
     # DQN parameters
     gamma: float = serializable(default=0.99)
