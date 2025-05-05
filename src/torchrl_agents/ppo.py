@@ -14,7 +14,7 @@ from typing import TypeVar
 T = TypeVar("T", bound="PPOAgent")
 
 
-@dataclass
+@dataclass(kw_only=True, eq=False, order=False)
 class PPOAgent(Agent, ABC):
     """Proximal Policy Optimization (PPO) agent."""
 

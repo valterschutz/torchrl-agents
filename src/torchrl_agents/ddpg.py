@@ -14,7 +14,7 @@ from typing import Any, TypeVar
 T = TypeVar("T", bound="DDPGAgent")
 
 
-@dataclass
+@dataclass(kw_only=True, eq=False, order=False)
 class DDPGAgent(Agent, ABC):
     """Deep Deterministic Policy Gradient (DDPG) agent."""
 

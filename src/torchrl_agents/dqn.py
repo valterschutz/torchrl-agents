@@ -16,7 +16,7 @@ from typing import Any, TypeVar
 T = TypeVar("T", bound="DQNAgent")
 
 
-@dataclass
+@dataclass(kw_only=True, eq=False, order=False)
 class DQNAgent(Agent, ABC):
     """Deep Q-Network (DQN) agent."""
 
