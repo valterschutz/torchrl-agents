@@ -17,77 +17,66 @@ from typing import Any, TypeVar
 
 T = TypeVar("T", bound="DQNAgent")
 
-def serializable(default=None, default_factory=None):
+def field_with_metadata(field_type: str, default=None, default_factory=None, init=True):
+    """Helper function to create a dataclass field with metadata."""
+    metadata = {"type": field_type}
+    if default is not None:
+        return field(default=default, init=init, metadata=metadata)
+    elif default_factory is not None:
+        return field(default_factory=default_factory, init=init, metadata=metadata)
+    else:
+        return field(init=init, metadata=metadata)
+
+def serializable(default=None, default_factory=None, init=True):
     """Mark a field as serializable (saved to params.yml)."""
-    metadata = {"type": "serializable"}
-    if default is not None:
-        return field(default=default, metadata=metadata)
-    elif default_factory is not None:
-        return field(default_factory=default_factory, metadata=metadata)
-    else:
-        return field(metadata=metadata)
+    return field_with_metadata("serializable",default, default_factory, init)
 
-def weights(default=None, default_factory=None):
+def weights(default=None, default_factory=None, init=False):
     """Mark a field as containing model weights (saved to model.pt)."""
-    metadata = {"type": "weights"}
-    if default is not None:
-        return field(default=default, metadata=metadata)
-    elif default_factory is not None:
-        return field(default_factory=default_factory, metadata=metadata)
-    else:
-        return field(metadata=metadata)
+    return field_with_metadata("weights", default, default_factory, init)
 
-def unserializable(default=None, default_factory=None):
+def unserializable(default=None, default_factory=None, init=True):
     """Mark a field as unserializable (saved to extra.pt)."""
-    metadata = {"type": "unserializable"}
-    if default is not None:
-        return field(default=default, metadata=metadata)
-    elif default_factory is not None:
-        return field(default_factory=default_factory, metadata=metadata)
-    else:
-        return field(metadata=metadata)
+    return field_with_metadata("unserializable", default, default_factory, init)
 
 
 @dataclass
 class DQNAgent(Agent, ABC):
     """Deep Q-Network (DQN) agent."""
 
-    action_spec: TensorSpec
+    action_spec: TensorSpec = unserializable()
 
-    _device: torch.device = field(default_factory=lambda: torch.device("cpu"))
+    _device: torch.device = unserializable(default_factory=lambda: torch.device("cpu"))
 
     # DQN parameters
-    gamma: float = 1
-    loss_function: str = "l2"
-    delay_value: bool = True
-    double_dqn: bool = False
+    gamma: float = serializable(default=1)
+    loss_function: str = serializable(default="l2")
+    delay_value: bool = serializable(default=True)
+    double_dqn: bool = serializable(default=False)
+
     # epsilon greedy parameters
-    eps_annealing_num_batches: int = 10000
-    eps_init: float = 1.0
-    eps_end: float = 0.1
-    update_tau: float = 0.005  # soft update parameter
+    eps_annealing_num_batches: int = serializable(default=10000)
+    eps_init: float = serializable(default=1.0)
+    eps_end: float = serializable(default=0.1)
+    update_tau: float = serializable(default=0.005)
 
     # Optimizer parameters
-    lr: float = 1e-3
-    max_grad_norm: float = 1
+    lr: float = serializable(default=1e-3)
+    max_grad_norm: float = serializable(default=1)
 
     # Replay buffer parameters
-    replay_buffer_size: int = 1000
-    sub_batch_size: int = 100  # size of batch when sampling from replay buffer
-    num_samples: int = 10  # how many times to sample from the replay buffer for each batch of data received
-    replay_buffer_device: torch.device = field(
-        default_factory=lambda: torch.device("cpu")
-    )
-    replay_buffer_alpha: float = 0.6
-    replay_buffer_beta_init: float = 0.4
-    replay_buffer_beta_end: float = 1.0
-    replay_buffer_beta_annealing_num_batches: int = 10000
-    init_random_frames: int = (
-        0  # how many random frames to sample before starting to train
-    )
+    replay_buffer_size: int = serializable(default=1000)
+    sub_batch_size: int = serializable(default=100)
+    num_samples: int = serializable(default=10)
+    replay_buffer_alpha: float = serializable(default=0.6)
+    replay_buffer_beta_init: float = serializable(default=0.4)
+    replay_buffer_beta_end: float = serializable(default=1.0)
+    replay_buffer_beta_annealing_num_batches: int = serializable(default=10000)
+    init_random_frames: int = serializable(default=0)
+    replay_buffer_device: torch.device = unserializable(default_factory=lambda: torch.device("cpu"))
 
     # Set in constructor
-    action_value_module: TensorDictModule = field(init=False)
+    action_value_module: TensorDictModule = weights(init=False)
     greedy_module: QValueModule = field(init=False)
     greedy_policy_module: TensorDictModule = field(init=False)
     egreedy_module: EGreedyModule = field(init=False)
@@ -250,55 +239,54 @@ class DQNAgent(Agent, ABC):
         self._device = device
         self.state_value_module = self.state_value_module.to(self._device)
 
+
     def save(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
-        # Save the model weights
-        torch.save(
-            {"action_value_module": self.action_value_module.state_dict()},
-            path / "model.pt",
-        )
+        # Save weights
+        weights_dict = {
+            field.name: getattr(self, field.name).state_dict()
+            for field in self.__dataclass_fields__.values()
+            if field.metadata.get("type") == "weights"
+        }
+        torch.save(weights_dict, path / "model.pt")
 
-        # Save unserializable objects separately (like TensorSpec)
-        torch.save(
-            {
-                "action_spec": self.action_spec,
-                "_device": self._device,
-                "replay_buffer_device": self.replay_buffer_device,
-            },
-            path / "extra.pt",
-        )
-
-        # Save YAML-serializable fields
-        def is_serializable_field(field_name: str) -> bool:
-            return field_name not in {"action_spec", "_device", "replay_buffer_device"} and self.__dataclass_fields__[field_name].init
-
-        yaml_dict = {
+        # Save unserializable fields
+        unserializable_dict = {
             field.name: getattr(self, field.name)
             for field in self.__dataclass_fields__.values()
-            if is_serializable_field(field.name)
+            if field.metadata.get("type") == "unserializable"
         }
+        torch.save(unserializable_dict, path / "extra.pt")
 
+        # Save serializable fields
+        serializable_dict = {
+            field.name: getattr(self, field.name)
+            for field in self.__dataclass_fields__.values()
+            if field.metadata.get("type") == "serializable"
+        }
         with open(path / "params.yml", "w") as f:
-            yaml.dump(yaml_dict, f)
+            yaml.dump(serializable_dict, f)
 
     @classmethod
     def load(cls: type[T], path: Path) -> T:
-        # Load YAML config
+        # Load serializable fields
         with open(path / "params.yml", "r") as f:
-            yaml_dict = yaml.safe_load(f)
+            serializable_dict = yaml.safe_load(f)
 
-        # Load TensorSpec or other non-YAML fields
-        extras = torch.load(path / "extra.pt", weights_only=False)
+        # Load unserializable fields
+        unserializable_dict = torch.load(path / "extra.pt", weights_only=False)
 
-        # Merge configs
-        full_dict = {**yaml_dict, **extras}
+        # Merge all fields
+        full_dict = {**serializable_dict, **unserializable_dict}
 
         # Construct agent
         agent = cls(**full_dict)
 
-        # Load model weights
-        checkpoint = torch.load(path / "model.pt")
-        agent.action_value_module.load_state_dict(checkpoint["action_value_module"])
+        # Load weights
+        weights_dict = torch.load(path / "model.pt")
+        for _field in agent.__dataclass_fields__.values():
+            if _field.metadata.get("type") == "weights":
+                getattr(agent, _field.name).load_state_dict(weights_dict[_field.name])
 
         return agent
