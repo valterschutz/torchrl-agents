@@ -107,11 +107,19 @@ class Agent(ABC):
         with open(path / "class_name.txt") as f:
             class_name = f.read().strip()
 
-        # Find the subclass
-        subclasses = {subclass.__name__: subclass for subclass in cls.__subclasses__()}
-        if class_name not in subclasses:
+        # Find the subclass, even if it's several layers down
+        def find_subclass(base_class: type, name: str) -> type | None:
+            for subclass in base_class.__subclasses__():
+                if subclass.__name__ == name:
+                    return subclass
+                found = find_subclass(subclass, name)
+                if found:
+                    return found
+            return None
+
+        subclass = find_subclass(cls, class_name)
+        if subclass is None:
             raise ValueError(f"Unknown subclass: {class_name}")
-        subclass = subclasses[class_name]
 
         # Load serializable fields
         with open(path / "params.yml") as f:
