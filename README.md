@@ -13,25 +13,14 @@ At the core of this package is the `Agent` abstract base class, which defines a 
 
 By subclassing the `Agent` class, you can implement various RL algorithms while adhering to a consistent structure.
 
+## Installation
+```bash
+pip install torchrl-agents
+```
+
 ## Examples
 
-The `examples` folder contains practical demonstrations of how to use the agents implemented in this package. These examples showcase:
-- Training RL agents on benchmark environments such as CartPole and Pendulum.
-- Using the modular components of the `Agent` class to customize behavior.
-- Saving and loading trained agents for evaluation or deployment.
-
-
-## Getting Started
-
-1. Install [uv](https://docs.astral.sh/uv/)
-
-2. Clone the repository and create a virtual environment:
-   ```bash
-   git clone https://github.com/valterschutz/torchrl-examples.git
-   uv sync
-   ```
-
-3. Explore the `examples` folder to see how to train and evaluate RL agents. The scripts can be run without any arguments.
+See [torchrl-examples]() for some examples where agents are trained on benchmark environments.
 
 ## License
 
