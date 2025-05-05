@@ -72,6 +72,10 @@ class Agent(ABC):
     def save(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
+        # Save the class name
+        with open(path / "class_name.txt", "w") as f:
+            f.write(self.__class__.__name__)
+
         # Save weights
         weights_dict = {
             field.name: getattr(self, field.name).state_dict()
@@ -99,6 +103,16 @@ class Agent(ABC):
 
     @classmethod
     def load(cls: type[T], path: Path) -> T:
+        # Load the class name
+        with open(path / "class_name.txt") as f:
+            class_name = f.read().strip()
+
+        # Find the subclass
+        subclasses = {subclass.__name__: subclass for subclass in cls.__subclasses__()}
+        if class_name not in subclasses:
+            raise ValueError(f"Unknown subclass: {class_name}")
+        subclass = subclasses[class_name]
+
         # Load serializable fields
         with open(path / "params.yml") as f:
             serializable_dict = yaml.safe_load(f)
@@ -110,7 +124,7 @@ class Agent(ABC):
         full_dict = {**serializable_dict, **unserializable_dict}
 
         # Construct agent
-        agent = cls(**full_dict)
+        agent = subclass(**full_dict)
 
         # Load weights
         weights_dict = torch.load(path / "model.pt")
