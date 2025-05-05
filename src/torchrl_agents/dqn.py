@@ -208,4 +208,4 @@ class DQNAgent(Agent, ABC):
     @device.setter
     def device(self, device: torch.device) -> None:
         self._device = device
-        self.state_value_module = self.state_value_module.to(self._device)
+        self.action_value_module = self.action_value_module.to(self._device)
