@@ -6,7 +6,7 @@ from torchrl.objectives import ClipPPOLoss
 from torchrl.objectives.value import GAE
 import torch
 from torchrl.data import LazyTensorStorage, ReplayBuffer, SamplerWithoutReplacement
-from torchrl_agents.agents import Agent, unserializable, weights
+from torchrl_agents import Agent, unserializable, weights
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TypeVar
