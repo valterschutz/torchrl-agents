@@ -15,15 +15,11 @@ from tensordict.nn import TensorDictModule
 from torch import nn
 from torchrl.envs import (
     Compose,
-    DoubleToFloat,
     ExplorationType,
     GymEnv,
-    ObservationNorm,
-    StepCounter,
     TransformedEnv,
     set_exploration_type,
 )
-from torchrl.modules import NormalParamExtractor, ProbabilisticActor, TanhNormal
 from torchrl_examples.training import train
 
 
@@ -75,7 +71,7 @@ def get_eval_metrics(td_evals: list[TensorDictBase]) -> dict[str, Any]:
 
 
 def main() -> None:
-    batch_size = 1000
+    batch_size = 64
     total_frames = 1000000
     n_batches = total_frames // batch_size
 
@@ -91,7 +87,7 @@ def main() -> None:
     agent = CartpoleV1DQNAgent(
         action_spec=env.action_spec,
         _device=torch.device("cuda:1"),
-        gamma=1,
+        gamma=0.99,
         loss_function="l2",
         delay_value=True,
         double_dqn=False,
@@ -109,7 +105,7 @@ def main() -> None:
         replay_buffer_beta_init=0.4,
         replay_buffer_beta_end=1,
         replay_buffer_beta_annealing_num_batches=n_batches,
-        init_random_frames=0,
+        init_random_frames=1000,
     )
 
     collector = SyncDataCollector(
@@ -131,7 +127,7 @@ def main() -> None:
         env,
         agent,
         run,
-        eval_every_n_batches=20,
+        eval_every_n_batches=50,
         eval_max_steps=eval_max_steps,
         n_eval_episodes=n_eval_episodes,
         get_eval_metrics=get_eval_metrics,

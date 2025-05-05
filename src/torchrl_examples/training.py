@@ -1,4 +1,5 @@
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 from tensordict import TensorDictBase
 import torch
 from torchrl.collectors import SyncDataCollector
@@ -20,7 +21,7 @@ def train(
     eval_max_steps: int,
     n_eval_episodes: int,
     get_eval_metrics: Callable[[list[TensorDictBase]], dict[str, Any]],
-    pixel_env: EnvBase|None = None,
+    pixel_env: EnvBase | None = None,
 ) -> None:
     try:
         for batch_idx, td_train in enumerate(tqdm(train_collector)):
@@ -50,7 +51,11 @@ def train(
                             eval_max_steps,
                             agent.policy,
                         )
-                        pixel_dict = {"eval/video": wandb.Video(td_pixel["pixels"].cpu().numpy())}
+                        pixel_dict = {
+                            "eval/video": wandb.Video(
+                                td_pixel["pixels"].permute(0, 3, 1, 2).cpu().numpy()
+                            )
+                        }
                     else:
                         pixel_dict = {}
                 metrics_eval = get_eval_metrics(td_evals)
@@ -59,7 +64,8 @@ def train(
                     {
                         f"eval/{k}": v
                         for k, v in (metrics_eval | agent.get_eval_info()).items()
-                    } | pixel_dict
+                    }
+                    | pixel_dict
                 )
 
     except KeyboardInterrupt:

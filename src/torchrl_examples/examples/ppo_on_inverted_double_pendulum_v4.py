@@ -26,6 +26,7 @@ from torchrl.envs import (
 from torchrl.modules import NormalParamExtractor, ProbabilisticActor, TanhNormal
 from torchrl_examples.training import train
 
+
 class InvertedDoublePendulumV4PPOAgent(PPOAgent):
     def get_policy_module(self) -> ProbabilisticActor:
         num_cells = 256
@@ -82,6 +83,7 @@ def get_eval_metrics(td_evals: list[TensorDictBase]) -> dict[str, Any]:
 
 def main() -> None:
     batch_size = 1000
+
     env = TransformedEnv(
         GymEnv("InvertedDoublePendulum-v4"),
         Compose(
@@ -93,6 +95,18 @@ def main() -> None:
     )
     env.transform[0].init_stats(num_iter=1000, reduce_dim=0, cat_dim=0)  # type: ignore
     env = env.to(torch.device("cuda:1"))
+
+    pixel_env = TransformedEnv(
+        GymEnv("InvertedDoublePendulum-v4", from_pixels=True, pixels_only=False),
+        Compose(
+            # normalize observations
+            ObservationNorm(in_keys=["observation"]),
+            DoubleToFloat(),
+            StepCounter(),
+        ),
+    )
+    pixel_env.transform[0].init_stats(num_iter=1000, reduce_dim=0, cat_dim=0)  # type: ignore
+    pixel_env = pixel_env.to(torch.device("cuda:1"))
 
     agent = InvertedDoublePendulumV4PPOAgent(
         _device=torch.device("cuda:1"),
@@ -130,10 +144,11 @@ def main() -> None:
         env,
         agent,
         run,
-        eval_every_n_batches=10,
+        eval_every_n_batches=100,
         eval_max_steps=eval_max_steps,
         n_eval_episodes=n_eval_episodes,
         get_eval_metrics=get_eval_metrics,
+        pixel_env=pixel_env,
     )
 
     print("Saving agent...")
@@ -155,10 +170,7 @@ def main() -> None:
     metrics_eval = get_eval_metrics(td_evals)
 
     run.log(
-        {
-            f"final/{k}": v
-            for k, v in (metrics_eval | agent.get_eval_info()).items()
-        },
+        {f"final/{k}": v for k, v in (metrics_eval | agent.get_eval_info()).items()},
     )
 
     run.finish()
