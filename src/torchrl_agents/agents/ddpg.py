@@ -6,7 +6,7 @@ from tensordict.nn import TensorDictModule
 from torch import Tensor, nn, optim
 import torch
 from torchrl.data import LazyTensorStorage, ReplayBuffer, TensorSpec
-from torchrl_examples.agents import Agent, serializable, unserializable, weights
+from torchrl_agents.agents import Agent, serializable, unserializable, weights
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, TypeVar

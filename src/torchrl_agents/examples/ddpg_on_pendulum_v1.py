@@ -9,7 +9,8 @@ import wandb
 from tensordict import TensorDictBase
 from torchrl.collectors import SyncDataCollector
 
-from torchrl_examples.agents.ddpg import DDPGAgent
+from torchrl_agents.agents import Agent
+from torchrl_agents.agents.ddpg import DDPGAgent
 
 from tensordict.nn import TensorDictModule
 from torch import nn
@@ -20,7 +21,7 @@ from torchrl.envs import (
     TransformedEnv,
     set_exploration_type,
 )
-from torchrl_examples.training import train
+from torchrl_agents.training import train
 
 
 class PendulumV1PolicyNet(nn.Module):
@@ -99,7 +100,7 @@ def main() -> None:
 
     pixel_env = None
 
-    agent = PendulumV1DDPGAgent(
+    agent: Agent = PendulumV1DDPGAgent(
         action_spec=env.action_spec,
         _device=torch.device("cuda:1"),
         gamma=0.99,
@@ -124,10 +125,7 @@ def main() -> None:
         total_frames=total_frames,
     )
 
-    run = wandb.init(
-        entity="valterschutz-chalmers-university-of-technology",
-        project="torchrl-examples-ddpg-pendulum-v1",
-    )
+    run = wandb.init()
 
     eval_max_steps = 1000
     n_eval_episodes = 100

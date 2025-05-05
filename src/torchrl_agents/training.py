@@ -8,7 +8,7 @@ from tqdm import tqdm
 import wandb
 from wandb.wandb_run import Run
 
-from torchrl_examples.agents import Agent
+from torchrl_agents.agents import Agent
 
 
 def train(

@@ -9,7 +9,8 @@ import wandb
 from tensordict import TensorDictBase
 from torchrl.collectors import SyncDataCollector
 
-from torchrl_examples.agents.dqn import DQNAgent
+from torchrl_agents.agents import Agent
+from torchrl_agents.agents.dqn import DQNAgent
 
 from tensordict.nn import TensorDictModule
 from torch import nn
@@ -20,7 +21,7 @@ from torchrl.envs import (
     TransformedEnv,
     set_exploration_type,
 )
-from torchrl_examples.training import train
+from torchrl_agents.training import train
 
 
 class CartpoleV1QNet(nn.Module):
@@ -84,7 +85,7 @@ def main() -> None:
     pixel_env = GymEnv("CartPole-v1", from_pixels=True, pixels_only=False)
     pixel_env = pixel_env.to(torch.device("cuda:1"))
 
-    agent = CartpoleV1DQNAgent(
+    agent: Agent = CartpoleV1DQNAgent(
         action_spec=env.action_spec,
         _device=torch.device("cuda:1"),
         gamma=0.99,
@@ -115,10 +116,7 @@ def main() -> None:
         total_frames=total_frames,
     )
 
-    run = wandb.init(
-        entity="valterschutz-chalmers-university-of-technology",
-        project="torchrl-examples-dqn-cartpole-v1",
-    )
+    run = wandb.init()
 
     eval_max_steps = 1000
     n_eval_episodes = 100

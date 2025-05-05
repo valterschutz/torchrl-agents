@@ -9,7 +9,8 @@ import wandb
 from tensordict import TensorDictBase
 from torchrl.collectors import SyncDataCollector
 
-from torchrl_examples.agents.ppo import PPOAgent
+from torchrl_agents.agents import Agent
+from torchrl_agents.agents.ppo import PPOAgent
 
 from tensordict.nn import TensorDictModule
 from torch import nn
@@ -24,7 +25,7 @@ from torchrl.envs import (
     set_exploration_type,
 )
 from torchrl.modules import NormalParamExtractor, ProbabilisticActor, TanhNormal
-from torchrl_examples.training import train
+from torchrl_agents.training import train
 
 
 class InvertedDoublePendulumV4PPOAgent(PPOAgent):
@@ -108,7 +109,7 @@ def main() -> None:
     pixel_env.transform[0].init_stats(num_iter=1000, reduce_dim=0, cat_dim=0)  # type: ignore
     pixel_env = pixel_env.to(torch.device("cuda:1"))
 
-    agent = InvertedDoublePendulumV4PPOAgent(
+    agent: Agent = InvertedDoublePendulumV4PPOAgent(
         _device=torch.device("cuda:1"),
         batch_size=batch_size,
         sub_batch_size=100,
@@ -132,10 +133,7 @@ def main() -> None:
         total_frames=1000000,
     )
 
-    run = wandb.init(
-        entity="valterschutz-chalmers-university-of-technology",
-        project="torchrl-examples-ppo-inverted-double-pendulum-v4",
-    )
+    run = wandb.init()
 
     eval_max_steps = 1000
     n_eval_episodes = 100
