@@ -24,6 +24,8 @@ class DQNAgent(Agent, ABC):
 
     _device: torch.device = unserializable(default_factory=lambda: torch.device("cpu"))
 
+    action_mask_key: str|None = serializable(None)
+
     # DQN parameters
     gamma: float = serializable(default=0.99)
     loss_function: str = serializable(default="l2")
@@ -79,6 +81,7 @@ class DQNAgent(Agent, ABC):
 
         self.greedy_module = QValueModule(
             spec=self.action_spec,
+            action_mask_key=self.action_mask_key,
             action_value_key="action_value",
             out_keys=["action", "action_value", "chosen_action_value"],
         ).to(self._device)
@@ -89,6 +92,8 @@ class DQNAgent(Agent, ABC):
 
         self.egreedy_module = EGreedyModule(
             spec=self.action_spec,
+            action_key="action",
+            action_mask_key=self.action_mask_key,
             annealing_num_steps=self.eps_annealing_num_batches,
             eps_init=self.eps_init,
             eps_end=self.eps_end,
