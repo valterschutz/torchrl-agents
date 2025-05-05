@@ -1,8 +1,6 @@
 from torchrl.data.replay_buffers.samplers import PrioritizedSampler
-from tensordict.nn import TensorDictSequential
 from tensordict import TensorDictBase
-from torchrl.objectives import DQNLoss, SoftUpdate, ValueEstimators
-from torchrl.modules import EGreedyModule, QValueModule
+from torchrl.objectives import DDPGLoss, SoftUpdate, ValueEstimators
 from torchrl.data import TensorDictReplayBuffer
 from tensordict.nn import TensorDictModule
 from torch import Tensor, nn, optim
@@ -13,27 +11,25 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
-T = TypeVar("T", bound="DQNAgent")
+T = TypeVar("T", bound="DDPGAgent")
 
 
 @dataclass
-class DQNAgent(Agent, ABC):
-    """Deep Q-Network (DQN) agent."""
+class DDPGAgent(Agent, ABC):
+    """Deep Deterministic Policy Gradient (DDPG) agent."""
 
     action_spec: TensorSpec = unserializable()
 
     _device: torch.device = unserializable(default_factory=lambda: torch.device("cpu"))
 
-    # DQN parameters
-    gamma: float = serializable(default=1)
+    # DDPG parameters
+    gamma: float = serializable(default=0.99)
     loss_function: str = serializable(default="l2")
+    delay_actor: bool = serializable(default=False)
     delay_value: bool = serializable(default=True)
-    double_dqn: bool = serializable(default=False)
+    separate_losses: bool = serializable(default=False)
 
-    # epsilon greedy parameters
-    eps_annealing_num_batches: int = serializable(default=10000)
-    eps_init: float = serializable(default=1.0)
-    eps_end: float = serializable(default=0.1)
+    # target network update rate
     update_tau: float = serializable(default=0.005)
 
     # Optimizer parameters
@@ -54,12 +50,9 @@ class DQNAgent(Agent, ABC):
     )
 
     # Set in constructor
-    action_value_module: TensorDictModule = weights(init=False)
-    greedy_module: QValueModule = field(init=False)
-    greedy_policy_module: TensorDictModule = field(init=False)
-    egreedy_module: EGreedyModule = field(init=False)
-    egreedy_policy_module: TensorDictModule = field(init=False)
-    loss_module: DQNLoss = field(init=False)
+    policy_module: TensorDictModule = weights(init=False)
+    state_action_value_module: TensorDictModule = weights(init=False)
+    loss_module: DDPGLoss = field(init=False)
     target_net_updater: SoftUpdate = field(init=False)
     loss_keys: list[str] = field(init=False)
     optimizer: optim.Adam = field(init=False)
@@ -68,44 +61,28 @@ class DQNAgent(Agent, ABC):
     # Getters to be defined in subclasses
 
     @abstractmethod
-    def get_action_value_module(self) -> TensorDictModule:
+    def get_policy_module(self) -> TensorDictModule:
+        """Get the action value module."""
+        pass
+
+    @abstractmethod
+    def get_state_action_value_module(self) -> TensorDictModule:
         """Get the action value module."""
         pass
 
     def __post_init__(self) -> None:
-        self.action_value_module = self.get_action_value_module().to(self._device)
-
-        self.greedy_module = QValueModule(
-            spec=self.action_spec,
-            action_value_key="action_value",
-            out_keys=["action", "action_value", "chosen_action_value"],
-        ).to(self._device)
-
-        self.greedy_policy_module = TensorDictSequential(
-            [self.action_value_module, self.greedy_module]
+        self.policy_module = self.get_policy_module().to(self._device)
+        self.state_action_value_module = self.get_state_action_value_module().to(
+            self._device
         )
 
-        self.egreedy_module = EGreedyModule(
-            spec=self.action_spec,
-            annealing_num_steps=self.eps_annealing_num_batches,
-            eps_init=self.eps_init,
-            eps_end=self.eps_end,
-        ).to(self._device)
-
-        self.egreedy_policy_module = TensorDictSequential(
-            [self.greedy_policy_module, self.egreedy_module]
-        )
-
-        self.loss_module = DQNLoss(
-            value_network=self.greedy_policy_module,
-            loss_function=self.loss_function,
-            delay_value=self.delay_value,
-            double_dqn=self.double_dqn,
-            action_space=self.action_spec,
+        self.loss_module = DDPGLoss(
+            actor_network=self.policy_module,
+            value_network=self.state_action_value_module,
         )
         self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
         self.target_net_updater = SoftUpdate(self.loss_module, eps=1 - self.update_tau)
-        self.loss_keys = ["loss"]
+        self.loss_keys = ["loss_actor", "loss_value"]
         self.optimizer = optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.replay_buffer = TensorDictReplayBuffer(
             storage=LazyTensorStorage(
@@ -122,7 +99,7 @@ class DQNAgent(Agent, ABC):
 
     @property
     def policy(self) -> TensorDictModule:
-        return self.egreedy_policy_module
+        return self.policy_module
 
     def _anneal_replay_buffer_beta(self) -> None:
         """Anneal the beta parameter for prioritized sampling."""
@@ -156,9 +133,6 @@ class DQNAgent(Agent, ABC):
         # Anneal beta for prioritized sampling
         self._anneal_replay_buffer_beta()
 
-        # Anneal epsilon for epsilon greedy exploration
-        self.egreedy_module.step()
-
         # Compute average loss
         avg_loss_td = {k: v / self.num_samples for k, v in total_loss_td.items()}
 
@@ -190,12 +164,7 @@ class DQNAgent(Agent, ABC):
         return {
             "replay_buffer_beta": self.replay_buffer.sampler.beta,
             "replay_buffer_size": len(self.replay_buffer),
-            "eps": self.egreedy_module.eps.item(),
         }
-
-    def get_eval_info(self) -> dict[str, Any]:
-        """Get evaluation information."""
-        return {}
 
     @property
     def device(self) -> torch.device:
@@ -205,4 +174,5 @@ class DQNAgent(Agent, ABC):
     @device.setter
     def device(self, device: torch.device) -> None:
         self._device = device
-        self.state_value_module = self.state_value_module.to(self._device)
+        self.policy_module = self.policy_module.to(self._device)
+        self.action_value_module = self.action_value_module.to(self._device)

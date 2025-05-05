@@ -9,7 +9,7 @@ from torchrl.data import LazyTensorStorage, ReplayBuffer, SamplerWithoutReplacem
 from torchrl_examples.agents import Agent, unserializable, weights
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T", bound="PPOAgent")
 
@@ -156,14 +156,6 @@ class PPOAgent(Agent, ABC):
 
         return loss_td
 
-    def get_train_info(self) -> dict[str, Any]:
-        """Get training information."""
-        return {}
-
-    def get_eval_info(self) -> dict[str, Any]:
-        """Get evaluation information."""
-        return {}
-
     @property
     def device(self) -> torch.device:
         """Get the device of the agent."""
@@ -174,37 +166,3 @@ class PPOAgent(Agent, ABC):
         self._device = device
         self.policy_module = self.policy_module.to(self._device)
         self.state_value_module = self.state_value_module.to(self._device)
-
-    # def save(self, path: Path) -> None:
-    #     """Save the agent to a file."""
-    #     # Create the directory if it doesn't exist
-    #     path.mkdir(parents=True, exist_ok=True)
-    #     torch.save(
-    #         {
-    #             "state_value_module": self.state_value_module,
-    #             "policy_module": self.policy_module,
-    #         },
-    #         path / "model.pt",
-    #     )
-
-    #     # Save a YAML file with all attributes that have type str, int, float, or bool
-    #     with open(path / "params.yml", "w") as f:
-    #         yaml.dump(
-    #             {
-    #                 k: v
-    #                 for k, v in self.__dict__.items()
-    #                 if isinstance(v, str | int | float | bool)
-    #             },
-    #             f,
-    #         )
-
-    # @classmethod
-    # def load(cls: type[T], path: Path) -> T:
-    #     """Load the agent from a file."""
-    #     with open(path / "params.yml", "r") as f:
-    #         d = yaml.safe_load(f)
-    #     new_agent = cls(**d)
-    #     checkpoint = torch.load(path / "model.pt", weights_only=False)
-    #     new_agent.state_value_module = checkpoint["state_value_module"]
-    #     new_agent.policy_module = checkpoint["policy_module"]
-    #     return new_agent

@@ -111,8 +111,8 @@ def main() -> None:
     collector = SyncDataCollector(
         env,  # type: ignore
         policy=agent.policy,
-        frames_per_batch=1000,
-        total_frames=1000000,
+        frames_per_batch=batch_size,
+        total_frames=total_frames,
     )
 
     run = wandb.init(
