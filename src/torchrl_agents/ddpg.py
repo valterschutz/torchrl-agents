@@ -58,7 +58,13 @@ class DDPGAgent(Agent, ABC):
     optimizer: optim.Adam = field(init=False)
     replay_buffer: ReplayBuffer = field(init=False)
 
-    # Getters to be defined in subclasses
+    def pre_init_hook(self) -> None:
+        """Hook for subclasses to optionally run code before __post_init__."""
+        pass
+
+    def post_init_hook(self) -> None:
+        """Hook for subclasses to optionally run code after __post_init__."""
+        pass
 
     @abstractmethod
     def get_policy_module(self) -> TensorDictModule:
@@ -71,6 +77,8 @@ class DDPGAgent(Agent, ABC):
         pass
 
     def __post_init__(self) -> None:
+        self.pre_init_hook()
+
         self.policy_module = self.get_policy_module().to(self._device)
         self.state_action_value_module = self.get_state_action_value_module().to(
             self._device
@@ -96,6 +104,8 @@ class DDPGAgent(Agent, ABC):
             priority_key="td_error",
             batch_size=self.sub_batch_size,
         )
+
+        self.post_init_hook()
 
     @property
     def policy(self) -> TensorDictModule:

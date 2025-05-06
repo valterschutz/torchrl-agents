@@ -1,6 +1,6 @@
 [project]
 name = "torchrl-agents"
-version = "0.3.8"
+version = "0.3.10"
 description = "Object-oriented RL agents based on torchrl."
 readme = "README.md"
 authors = [
@@ -87,6 +87,7 @@ ignore = [
     "ANN001", # Missing type annotation for function argument
     "ANN201", # Missing return type annotation for public function
     "D104", # Missing docstring in public package
+    "D401", # First line should be in imperative mood
     # Recommended to ignore according to https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
     "W191", # tab-indentation
     "E111", # indentation-with-invalid-multiple

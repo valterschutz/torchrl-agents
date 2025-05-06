@@ -61,6 +61,14 @@ class PPOAgent(Agent, ABC):
     optimizer: optim.Adam = field(init=False)
     replay_buffer: ReplayBuffer = field(init=False)
 
+    def pre_init_hook(self) -> None:
+        """Hook for subclasses to optionally run code before __post_init__."""
+        pass
+
+    def post_init_hook(self) -> None:
+        """Hook for subclasses to optionally run code after __post_init__."""
+        pass
+
     @abstractmethod
     def get_policy_module(self) -> ProbabilisticTensorDictSequential:
         """Get the policy module."""
@@ -75,6 +83,8 @@ class PPOAgent(Agent, ABC):
         # Ensure batch_size is divisible by sub_batch_size
         if self.batch_size % self.sub_batch_size != 0:
             raise ValueError("batch_size must be divisible by sub_batch_size.")
+
+        self.pre_init_hook()
 
         self.policy_module = self.get_policy_module().to(self._device)
         self.state_value_module = self.get_state_value_module().to(self._device)
@@ -105,6 +115,8 @@ class PPOAgent(Agent, ABC):
             sampler=SamplerWithoutReplacement(),
             batch_size=self.sub_batch_size,
         )
+
+        self.post_init_hook()
 
     @property
     def policy(self) -> ProbabilisticTensorDictSequential:

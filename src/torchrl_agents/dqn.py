@@ -69,7 +69,13 @@ class DQNAgent(Agent, ABC):
     optimizer: optim.Adam = field(init=False)
     replay_buffer: ReplayBuffer = field(init=False)
 
-    # Getters to be defined in subclasses
+    def pre_init_hook(self) -> None:
+        """Hook for subclasses to optionally run code before __post_init__."""
+        pass
+
+    def post_init_hook(self) -> None:
+        """Hook for subclasses to optionally run code after __post_init__."""
+        pass
 
     @abstractmethod
     def get_action_value_module(self) -> TensorDictModule:
@@ -77,6 +83,8 @@ class DQNAgent(Agent, ABC):
         pass
 
     def __post_init__(self) -> None:
+        self.pre_init_hook()
+
         self.action_value_module = self.get_action_value_module().to(self._device)
 
         self.greedy_module = QValueModule(
@@ -126,6 +134,8 @@ class DQNAgent(Agent, ABC):
             priority_key="td_error",
             batch_size=self.sub_batch_size,
         )
+
+        self.post_init_hook()
 
     @property
     def policy(self) -> TensorDictModule:
