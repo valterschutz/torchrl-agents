@@ -1,5 +1,5 @@
 from tensordict import TensorDictBase
-from torchrl.data import TensorDictReplayBuffer
+from torchrl.data import TensorDictReplayBuffer, TensorSpec
 from tensordict.nn import ProbabilisticTensorDictSequential, TensorDictModule
 from torch import Tensor, nn, optim
 from torchrl.objectives import ClipPPOLoss
@@ -17,6 +17,8 @@ T = TypeVar("T", bound="PPOAgent")
 @dataclass(kw_only=True, eq=False, order=False)
 class PPOAgent(Agent, ABC):
     """Proximal Policy Optimization (PPO) agent."""
+
+    action_spec: TensorSpec = unserializable(default=None)
 
     # Device. All modules created by subclasses will be moved to this device.
     _device: torch.device = unserializable(default_factory=lambda: torch.device("cpu"))
