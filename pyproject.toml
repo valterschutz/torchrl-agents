@@ -9,8 +9,11 @@ authors = [
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
+    "gymnasium[classic-control]>=1.1.1",
     "pyyaml>=6.0.2",
     "torchrl>=0.8.0",
+    "tqdm>=4.67.1",
+    "wandb[media]>=0.19.11",
 ]
 classifiers = [
     "Intended Audience :: Science/Research",

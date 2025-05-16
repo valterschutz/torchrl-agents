@@ -28,9 +28,9 @@ class SACAgent(Agent, ABC):
     # SAC parameters
     num_qvalue_nets: int = serializable(default=2)
     loss_function: str = serializable(default="smooth_l1")
-    alpha_init: bool = serializable(default=False)
-    min_alpha: bool = serializable(default=True)
-    max_alpha: bool = serializable(default=False)
+    alpha_init: float = serializable(default=1.0)
+    min_alpha: float | None = serializable(default=None)
+    max_alpha: float | None = serializable(default=None)
     fixed_alpha: bool = serializable(default=False)
     target_entropy: float | str = serializable(default="auto")
     delay_actor: bool = serializable(default=False)
@@ -117,7 +117,6 @@ class SACAgent(Agent, ABC):
             delay_actor=self.delay_actor,
             delay_qvalue=self.delay_qvalue,
             delay_value=self.delay_value,
-            priority_key="td_error",
             separate_losses=self.separate_losses,
             reduction=self.reduction,
             skip_done_states=self.skip_done_states,
