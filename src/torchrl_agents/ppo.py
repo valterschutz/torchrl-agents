@@ -95,7 +95,8 @@ class PPOAgent(Agent, ABC):
             gamma=self.gamma,
             lmbda=self.lmbda,
             value_network=self.state_value_module,
-            average_gae=self.sub_batch_size > 1, # we cannot average or calculate std with a single sample
+            average_gae=self.sub_batch_size
+            > 1,  # we cannot average or calculate std with a single sample
         )
         self.loss_module = ClipPPOLoss(
             actor_network=self.policy_module,
