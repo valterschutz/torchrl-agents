@@ -10,9 +10,6 @@ from torchrl.data import LazyTensorStorage, ReplayBuffer, TensorSpec
 from torchrl_agents import Agent, serializable, unserializable, weights
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TypeVar
-
-T = TypeVar("T", bound="SACAgent")
 
 
 @dataclass(kw_only=True, eq=False, order=False)
@@ -84,7 +81,7 @@ class SACAgent(Agent, ABC):
         pass
 
     @abstractmethod
-    def get_state_value_module(self) -> TensorDictModule:
+    def get_state_value_module(self) -> TensorDictModuleBase | None:
         """Get the action value module."""
         pass
 
@@ -97,7 +94,9 @@ class SACAgent(Agent, ABC):
         self.pre_init_hook()
 
         self.policy_module = self.get_policy_module().to(self._device)
-        self.state_value_module = self.get_state_value_module().to(self._device)
+        self.state_value_module = self.get_state_value_module()
+        if self.state_value_module is not None:
+            self.state_value_module = self.state_value_module.to(self._device)
         self.state_action_value_module = self.get_state_action_value_module().to(
             self._device
         )
@@ -123,7 +122,9 @@ class SACAgent(Agent, ABC):
         )
         self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
         self.target_net_updater = SoftUpdate(self.loss_module, eps=1 - self.update_tau)
-        self.loss_keys = ["loss_actor", "loss_alpha", "loss_qvalue", "loss_value"]
+        self.loss_keys = ["loss_actor", "loss_alpha", "loss_qvalue"]
+        if self.state_value_module is not None:
+            self.loss_keys.append("loss_value")
         self.optimizer = optim.Adam(self.loss_module.parameters(), lr=self.lr)
         self.replay_buffer = TensorDictReplayBuffer(
             storage=LazyTensorStorage(
@@ -170,9 +171,6 @@ class SACAgent(Agent, ABC):
             for k in self.loss_keys:
                 total_loss_td[k] += loss_td[k].item()
 
-        # Update target network
-        self.target_net_updater.step()
-
         # Anneal beta for prioritized sampling
         self._anneal_replay_buffer_beta()
 
@@ -196,6 +194,9 @@ class SACAgent(Agent, ABC):
             self.loss_module.parameters(), max_norm=self.max_grad_norm
         )
         self.optimizer.step()
+
+        # Update target network
+        self.target_net_updater.step()
 
         # Update priorities in the replay buffer
         self.replay_buffer.update_tensordict_priority(td)  # type: ignore

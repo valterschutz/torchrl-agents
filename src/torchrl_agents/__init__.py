@@ -76,15 +76,17 @@ class Agent(ABC):
         with open(path / "class_name.txt", "w") as f:
             f.write(self.__class__.__name__)
 
-        # Save weights
+        # Save weights to model.pt
         weights_dict = {
             field.name: getattr(self, field.name).state_dict()
+            if getattr(self, field.name) is not None
+            else None
             for field in self.__dataclass_fields__.values()
             if field.metadata.get("type") == "weights"
         }
         torch.save(weights_dict, path / "model.pt")
 
-        # Save unserializable fields
+        # Save unserializable fields to extra.pt
         unserializable_dict = {
             field.name: getattr(self, field.name)
             for field in self.__dataclass_fields__.values()
@@ -92,7 +94,7 @@ class Agent(ABC):
         }
         torch.save(unserializable_dict, path / "extra.pt")
 
-        # Save serializable fields
+        # Save serializable fields to params.yml
         serializable_dict = {
             field.name: getattr(self, field.name)
             for field in self.__dataclass_fields__.values()
@@ -138,6 +140,9 @@ class Agent(ABC):
         weights_dict = torch.load(path / "model.pt")
         for _field in agent.__dataclass_fields__.values():
             if _field.metadata.get("type") == "weights":
-                getattr(agent, _field.name).load_state_dict(weights_dict[_field.name])
+                weights = weights_dict.get(_field.name)
+                model = getattr(agent, _field.name)
+                if weights is not None:
+                    model.load_state_dict(weights)
 
         return agent

@@ -25,6 +25,7 @@ def train(
 ) -> None:
     try:
         for batch_idx, td_train in enumerate(tqdm(train_collector)):
+            train_collector.update_policy_weights_()
             loss_info = agent.process_batch(td_train)
 
             # Log training info

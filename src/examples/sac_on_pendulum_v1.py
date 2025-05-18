@@ -106,19 +106,18 @@ class PendulumV1SACAgent(SACAgent):
 
         return policy_module
 
-    def get_state_value_module(self) -> TensorDictModule:
-        self.state_value_net = PendulumV1StateValueNet()
-        return TensorDictModule(
-            self.state_value_net,
-            in_keys=["observation"],
-            out_keys=["state_value"],
-        )
+    def get_state_value_module(self) -> TensorDictModule | None:
+        return None
 
     def get_eval_info(self) -> dict[str, Any]:
         """Get evaluation info."""
         return {
             "replay buffer stored elems": len(self.replay_buffer),
         }
+
+    def get_train_info(self) -> dict[str, Any]:
+        """Get training info."""
+        return {"entropy alpha": self.loss_module._alpha}
 
 
 def get_eval_metrics(td_evals: list[TensorDictBase]) -> dict[str, Any]:
@@ -128,13 +127,17 @@ def get_eval_metrics(td_evals: list[TensorDictBase]) -> dict[str, Any]:
     for td in td_evals:
         metrics["reward_sum"] += td["next", "reward"].sum().item()
     metrics["reward_sum"] /= len(td_evals)
+    metrics["action"] = wandb.Histogram(
+        torch.cat([td["action"] for td in td_evals], dim=0).cpu().numpy()
+    )
     return metrics
 
 
 def main() -> None:
-    device = torch.device("cuda:0")
+    device = torch.device("cuda")
     batch_size = 64
-    total_frames = 1000000
+    total_frames = 10000 * 64
+    # total_frames = 10*64
     n_batches = total_frames // batch_size
 
     env = TransformedEnv(
@@ -150,7 +153,10 @@ def main() -> None:
         action_spec=env.action_spec,
         _device=device,
         gamma=0.99,
-        # TODO: SAC kwargs
+        alpha_init=1.0,
+        max_alpha=1.0,
+        min_alpha=0.001,
+        target_entropy=0.0,
         update_tau=0.005,
         lr=1e-3,
         max_grad_norm=1,
@@ -175,10 +181,9 @@ def main() -> None:
     run = wandb.init()
 
     eval_max_steps = 1000
-    n_eval_episodes = 100
+    n_eval_episodes = 10
 
     wandb.watch(agent.policy_net, log="all", log_freq=1000)
-    wandb.watch(agent.state_value_net, log="all", log_freq=1000)
     wandb.watch(agent.state_action_value_net, log="all", log_freq=1000)
 
     train(
