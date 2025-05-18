@@ -1,12 +1,14 @@
+from typing import Any
 from torchrl.data.replay_buffers.samplers import PrioritizedSampler
 from torchrl.objectives import SACLoss
 from tensordict import TensorDictBase
 from torchrl.objectives import SoftUpdate, ValueEstimators
-from torchrl.data import TensorDictReplayBuffer
+from torchrl.data import ListStorage, TensorDictReplayBuffer
 from tensordict.nn import TensorDictModule, TensorDictModuleBase
 from torch import Tensor, nn, optim
 import torch
 from torchrl.data import LazyTensorStorage, ReplayBuffer, TensorSpec
+import wandb
 from torchrl_agents import Agent, serializable, unserializable, weights
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -52,15 +54,16 @@ class SACAgent(Agent, ABC):
     replay_buffer_beta_init: float = serializable(default=0.4)
     replay_buffer_beta_end: float = serializable(default=1.0)
     replay_buffer_beta_annealing_num_batches: int = serializable(default=10000)
+    replay_buffer_storage_type: type = unserializable(default=ListStorage)
     init_random_frames: int = serializable(default=0)
     replay_buffer_device: torch.device = unserializable(
         default_factory=lambda: torch.device("cpu")
     )
 
     # Set in constructor
-    policy_module: TensorDictModule = weights(init=False)
-    state_value_module: TensorDictModule = weights(init=False)
-    state_action_value_module: TensorDictModule = weights(init=False)
+    policy_module: TensorDictModuleBase = weights(init=False)
+    state_value_module: TensorDictModuleBase | None = weights(init=False)
+    state_action_value_module: TensorDictModuleBase = weights(init=False)
     loss_module: SACLoss = field(init=False)
     target_net_updater: SoftUpdate = field(init=False)
     loss_keys: list[str] = field(init=False)
@@ -126,10 +129,21 @@ class SACAgent(Agent, ABC):
         if self.state_value_module is not None:
             self.loss_keys.append("loss_value")
         self.optimizer = optim.Adam(self.loss_module.parameters(), lr=self.lr)
+        if self.replay_buffer_storage_type is LazyTensorStorage:
+            storage = (
+                LazyTensorStorage(
+                    max_size=self.replay_buffer_size, device=self.replay_buffer_device
+                ),
+            )
+        elif self.replay_buffer_storage_type is ListStorage:
+            storage = ListStorage(max_size=self.replay_buffer_size)
+        else:
+            raise ValueError(
+                f"Invalid storage type: {self.replay_buffer_storage_type}. "
+                "Must be either LazyTensorStorage or ListStorage."
+            )
         self.replay_buffer = TensorDictReplayBuffer(
-            storage=LazyTensorStorage(
-                max_size=self.replay_buffer_size, device=self.replay_buffer_device
-            ),
+            storage=storage,
             sampler=PrioritizedSampler(
                 max_capacity=self.replay_buffer_size,
                 alpha=self.replay_buffer_alpha,
@@ -161,23 +175,41 @@ class SACAgent(Agent, ABC):
         if len(self.replay_buffer) < self.init_random_frames:
             return {k: 0.0 for k in self.loss_keys}
 
-        # Initialize total loss dictionary
-        total_loss_td = {k: 0.0 for k in self.loss_keys}
+        process_info_dict: dict[str, Any] = {k: 0.0 for k in self.loss_keys}
 
         for _ in range(self.num_samples):
             loss_td = self._sample_and_train()
 
             # Accumulate losses
             for k in self.loss_keys:
-                total_loss_td[k] += loss_td[k].item()
+                process_info_dict[k] += loss_td[k].item()
+
+            process_info_dict["td_error"] = loss_td["td_error"].mean().item()
+            process_info_dict["alpha"] = loss_td["alpha"].mean().item()
+            process_info_dict["entropy"] = loss_td["entropy"].mean().item()
 
         # Anneal beta for prioritized sampling
         self._anneal_replay_buffer_beta()
 
         # Compute average loss
-        avg_loss_td = {k: v / self.num_samples for k, v in total_loss_td.items()}
+        process_info_dict = {
+            k: v / self.num_samples for k, v in process_info_dict.items()
+        }
 
-        return avg_loss_td
+        with torch.no_grad():
+            if self.state_value_module is not None:
+                self.state_value_module(td)
+                process_info_dict["State values"] = wandb.Histogram(
+                    td["state_value"][~td["next", "done"][:, 0]].detach().cpu()
+                )
+
+            # Also return Q-values, useful for debugging
+            self.state_action_value_module(td)
+            process_info_dict["Q values"] = wandb.Histogram(
+                td["state_action_value"].detach().cpu()
+            )
+
+        return process_info_dict
 
     def _sample_and_train(self) -> TensorDictBase:
         """Sample from the replay buffer and train the policy, returning the loss td."""
@@ -200,6 +232,9 @@ class SACAgent(Agent, ABC):
 
         # Update priorities in the replay buffer
         self.replay_buffer.update_tensordict_priority(td)  # type: ignore
+
+        # SAC loss module also writes a td_error key which is usefull for logging
+        loss_td["td_error"] = td["td_error"]
 
         return loss_td
 
