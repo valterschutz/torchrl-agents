@@ -183,8 +183,8 @@ def main() -> None:
     eval_max_steps = 1000
     n_eval_episodes = 10
 
-    wandb.watch(agent.policy_net, log="all", log_freq=1000)
-    wandb.watch(agent.state_action_value_net, log="all", log_freq=1000)
+    # wandb.watch(agent.policy_net, log="all", log_freq=1000)
+    # wandb.watch(agent.state_action_value_net, log="all", log_freq=1000)
 
     train(
         collector,

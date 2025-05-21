@@ -26,13 +26,23 @@ def train(
     try:
         for batch_idx, td_train in enumerate(tqdm(train_collector)):
             train_collector.update_policy_weights_()
-            loss_info = agent.process_batch(td_train)
+
+            if batch_idx == 1000:
+                pass
+
+            # Assume that td_train has two different batch dimensions: number of agents and time. Collapse them
+            td_train = td_train.flatten(0, 1)
+            process_batch_info = agent.process_batch(td_train)
 
             # Log training info
             run.log(
                 {
                     f"train/{k}": v
-                    for k, v in (loss_info | agent.get_train_info()).items()
+                    for k, v in (
+                        process_batch_info
+                        | agent.get_train_info()
+                        | {"reward": td_train["next", "reward"].mean().item()}
+                    ).items()
                 },
             )
 
@@ -42,6 +52,7 @@ def train(
                     torch.no_grad(),
                     set_exploration_type(ExplorationType.DETERMINISTIC),
                 ):
+                    agent.eval()
                     td_evals = [
                         eval_env.rollout(eval_max_steps, agent.policy)
                         for _ in tqdm(range(n_eval_episodes), desc="Evaluating")
@@ -68,6 +79,7 @@ def train(
                     }
                     | pixel_dict
                 )
+                agent.train()
 
     except KeyboardInterrupt:
         print("Training interrupted.")
