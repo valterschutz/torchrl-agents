@@ -4,14 +4,13 @@ from torchrl.collectors import SyncDataCollector
 from torchrl.data.replay_buffers.samplers import PrioritizedSampler
 from torchrl.modules import (
     MLP,
-    ActorCriticOperator,
     NoisyLinear,
 )
 from torchrl.objectives import TD3Loss
 from tensordict import TensorDictBase
 from torchrl.objectives import SoftUpdate, ValueEstimators
 from torchrl.data import TensorDictReplayBuffer
-from tensordict.nn import TensorDictModule
+from tensordict.nn import TensorDictModule, TensorDictSequential
 from torch import Tensor, nn, optim
 import torch
 from torchrl.data import LazyTensorStorage, TensorSpec
@@ -201,20 +200,20 @@ class StepToyEnvTD3Agent(Agent, ABC):
             out_keys=["step_embedding"],
         )
 
-        self.policy_net = PolicyNet(
-            step_embedding_dim=self.step_embedding_dim,
-            init_exploration_std=self.init_exploration_std,
-        )
-        self.policy_head = TensorDictModule(
-            self.policy_net,
-            in_keys=["step_embedding"],
-            out_keys=["action"],
-        )
+        # self.policy_net = PolicyNet(
+        #     step_embedding_dim=self.step_embedding_dim,
+        #     init_exploration_std=self.init_exploration_std,
+        # )
+        # self.policy_head = TensorDictModule(
+        #     self.policy_net,
+        #     in_keys=["step_embedding"],
+        #     out_keys=["action"],
+        # )
         # self.policy_module = TensorDictSequential(
         #     [self.backbone, self.policy_head],
         # )
-        # self.policy_net = TempPolicyNet(self.n_steps, init_exploration_std=self.init_exploration_std)
-        # self.policy_module = TensorDictModule( self.policy_net, in_keys=["step"], out_keys=["action"])
+        self.policy_net = TempPolicyNet(self.n_steps, init_exploration_std=self.init_exploration_std)
+        self.policy_module = TensorDictModule( self.policy_net, in_keys=["step"], out_keys=["action"])
 
         self.state_action_value_net = StateActionValueNet(
             step_embedding_dim=self.step_embedding_dim
@@ -224,18 +223,20 @@ class StepToyEnvTD3Agent(Agent, ABC):
             in_keys=["step_embedding", "action"],
             out_keys=["state_action_value"],
         )
-        # self.state_action_value_module = TensorDictSequential(
-        #     [self.backbone, self.state_action_value_head],
-        # )
-        self.actor_critic = ActorCriticOperator(
-            common_operator=self.backbone,
-            policy_operator=self.policy_head,
-            value_operator=self.state_action_value_head,
+        self.state_action_value_module = TensorDictSequential(
+            [self.backbone, self.state_action_value_head],
         )
+        # self.actor_critic = ActorCriticOperator(
+        #     common_operator=self.backbone,
+        #     policy_operator=self.policy_head,
+        #     value_operator=self.state_action_value_head,
+        # )
 
         self.loss_module = TD3Loss(
-            actor_network=self.actor_critic.get_policy_operator(),
-            qvalue_network=self.actor_critic.get_value_head(),
+            # actor_network=self.actor_critic.get_policy_operator(),
+            # qvalue_network=self.actor_critic.get_value_head(),
+            actor_network=self.policy_module,
+            qvalue_network=self.state_action_value_module,
             action_spec=self.action_spec,
             num_qvalue_nets=self.num_qvalue_nets,
             policy_noise=self.policy_noise,
@@ -290,23 +291,26 @@ class StepToyEnvTD3Agent(Agent, ABC):
 
     @property
     def backbone_net_params(self):
-        return self.loss_module.actor_network_params["module"]["0"]
+        # return self.loss_module.actor_network_params["module"]["0"]
+        return self.loss_module.qvalue_network_params["module"]["0"]
 
     @property
     def state_action_value_net_params(self):
-        return self.loss_module.qvalue_network_params["module"]
+        return self.loss_module.qvalue_network_params["module"]["1"]
 
     @property
     def target_state_action_value_net_params(self):
-        return self.loss_module.target_qvalue_network_params["module"]
+        return self.loss_module.target_qvalue_network_params["module"]["1"]
 
     @property
     def policy_net_params(self):
-        return self.loss_module.actor_network_params["module"]["1"]
+        # return self.loss_module.actor_network_params["module"]["1"]
+        return self.loss_module.actor_network_params["module"]
 
     @property
     def policy(self) -> TensorDictModule:
-        return self.actor_critic.get_policy_operator()
+        # return self.actor_critic.get_policy_operator()
+        return self.policy_module
 
     def _anneal_replay_buffer_beta(self) -> None:
         """Anneal the beta parameter for prioritized sampling."""
@@ -415,11 +419,13 @@ class StepToyEnvTD3Agent(Agent, ABC):
 
     def eval(self) -> None:
         """Set the agent to evaluation mode."""
-        self.actor_critic.eval()
+        # self.actor_critic.eval()
+        self.policy_module.eval()
 
     def train(self) -> None:
         """Set the agent to evaluation mode."""
-        self.actor_critic.train()
+        # self.actor_critic.train()
+        self.policy_module.train()
 
 
 def get_eval_metrics(td_evals: list[TensorDictBase]) -> dict[str, Any]:
@@ -431,8 +437,8 @@ def get_eval_metrics(td_evals: list[TensorDictBase]) -> dict[str, Any]:
 
 def main() -> None:
     device = torch.device("cpu")
-    batch_size = 1
-    total_frames = 100000
+    batch_size = 64
+    total_frames = 5000 * 64
     # total_frames = 10*64
     n_batches = total_frames // batch_size
 
@@ -444,11 +450,11 @@ def main() -> None:
         n_steps=5,
         step_embedding_dim=5,
         gamma=0.99,
-        update_tau=0.001,
-        state_action_value_net_lr=1e-4,
-        backbone_net_lr=1e-6,
-        policy_net_lr=1e-6,
-        replay_buffer_size=10000,
+        update_tau=0.01,
+        state_action_value_net_lr=1e-2,
+        backbone_net_lr=1e-3,
+        policy_net_lr=1e-3,
+        replay_buffer_size=64,
         replay_buffer_beta_annealing_num_batches=total_frames,
         sub_batch_size=64,
         num_samples=1,
@@ -458,7 +464,7 @@ def main() -> None:
         noise_clip=0.1,
         init_exploration_std=1,
         separate_losses=False,
-        init_frames=64,
+        init_frames=0,
     )
 
     # Manual debugging
@@ -488,7 +494,7 @@ def main() -> None:
         env,
         agent,
         run,
-        eval_every_n_batches=500,
+        eval_every_n_batches=100,
         eval_max_steps=eval_max_steps,
         n_eval_episodes=n_eval_episodes,
         get_eval_metrics=get_eval_metrics,
