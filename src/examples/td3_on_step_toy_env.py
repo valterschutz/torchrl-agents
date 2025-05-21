@@ -1,5 +1,6 @@
 from typing import Any
 from torch.nn import functional as F
+from torch.nn.utils.parametrizations import weight_norm
 from torchrl.collectors import SyncDataCollector
 from torchrl.data.replay_buffers.samplers import PrioritizedSampler
 from torchrl.modules import (
@@ -58,11 +59,23 @@ class StateActionValueNet(nn.Module):
     def __init__(self, step_embedding_dim: int):
         super().__init__()
         self.step_embedding_dim = step_embedding_dim
-        self.net = MLP(self.step_embedding_dim + 1, 1, num_cells=(32, 32))
+        # self.net = MLP(self.step_embedding_dim + 1, 1, num_cells=(32, 32), norm_class=nn.LayerNorm, dropout=0.1)
+        self.net = nn.Sequential(
+            weight_norm(nn.Linear(self.step_embedding_dim + 1, 32), dim=None),
+            # nn.LayerNorm(32),
+            nn.Tanh(),
+            nn.Dropout(0.1),
+            weight_norm(nn.Linear(32, 32), dim=None),
+            # nn.LayerNorm(32),
+            nn.Tanh(),
+            nn.Dropout(0.1),
+            nn.Linear(32, 1),
+        )
 
     def forward(self, step_embedding: Tensor, action: Tensor) -> Tensor:
         # step_embedding: (batch_size, embedding_dim)
         # action: (batch_size, 1)
+        # step_embedding = F.normalize(step_embedding, dim=-1)
         x = torch.cat(
             (step_embedding, action), dim=-1
         )  # (batch_size, step_embedding_dim + 1)
@@ -255,7 +268,7 @@ class StepToyEnvTD3Agent(Agent, ABC):
             self.backbone_net_params.values(True, True), lr=self.backbone_net_lr
         )
         # def backbone_normalize_hook(optimizer, *args, **kwargs):
-        #     self.backbone_net.normalize_weights()
+        #     self.loss_module.qvalue_network_params["module"]["0"]["module"]["step_embeddings"]["weight"].data = F.normalize(self.loss_module.qvalue_network_params["module"]["0"]["module"]["step_embeddings"]["weight"].data, dim=-1)
         # self.backbone_net_optimizer.register_step_post_hook(backbone_normalize_hook)
         self.state_action_value_net_optimizer = optim.Adam(
             self.state_action_value_net_params.values(True, True),
@@ -453,7 +466,7 @@ def main() -> None:
         update_tau=0.01,
         state_action_value_net_lr=1e-2,
         backbone_net_lr=1e-3,
-        policy_net_lr=1e-3,
+        policy_net_lr=0,
         replay_buffer_size=64,
         replay_buffer_beta_annealing_num_batches=total_frames,
         sub_batch_size=64,
