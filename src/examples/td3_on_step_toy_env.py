@@ -1,13 +1,18 @@
 from typing import Any
+from umap import UMAP
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from torch.nn import functional as F
 from torchrl.collectors import SyncDataCollector
 from torchrl.data.replay_buffers.samplers import PrioritizedSampler
 from torchrl.modules import (
     MLP,
+    ActorCriticOperator,
     NoisyLinear,
 )
 from torchrl.objectives import TD3Loss
-from tensordict import TensorDictBase
+from tensordict import TensorDict, TensorDictBase
 from torchrl.objectives import SoftUpdate, ValueEstimators
 from torchrl.data import TensorDictReplayBuffer
 from tensordict.nn import TensorDictModule, TensorDictSequential
@@ -43,22 +48,11 @@ class StepEmbeddingNet(nn.Module):
         )
 
 
-class StateValueNet(nn.Module):
-    def __init__(self, step_embedding_dim: int):
-        super().__init__()
-        self.step_embedding_dim = step_embedding_dim
-        self.net = MLP(self.step_embedding_dim, 1, num_cells=(32, 32))
-
-    def forward(self, step_embedding: Tensor) -> Tensor:
-        # step_embedding: (batch_size, embedding_dim)
-        return self.net(step_embedding)  # (batch_size, 1)
-
-
 class StateActionValueNet(nn.Module):
     def __init__(self, step_embedding_dim: int):
         super().__init__()
         self.step_embedding_dim = step_embedding_dim
-        self.net = MLP(self.step_embedding_dim + 1, 1, num_cells=(32, 32))
+        self.net = MLP(self.step_embedding_dim + 1, 1, num_cells=(32, 32), dropout=0.1)
 
     def forward(self, step_embedding: Tensor, action: Tensor) -> Tensor:
         # step_embedding: (batch_size, embedding_dim)
@@ -200,20 +194,24 @@ class StepToyEnvTD3Agent(Agent, ABC):
             out_keys=["step_embedding"],
         )
 
-        # self.policy_net = PolicyNet(
-        #     step_embedding_dim=self.step_embedding_dim,
-        #     init_exploration_std=self.init_exploration_std,
+        self.policy_net = PolicyNet(
+            step_embedding_dim=self.step_embedding_dim,
+            init_exploration_std=self.init_exploration_std,
+        )
+        self.policy_head = TensorDictModule(
+            self.policy_net,
+            in_keys=["step_embedding"],
+            out_keys=["action"],
+        )
+        self.policy_module = TensorDictSequential(
+            [self.backbone, self.policy_head],
+        )
+        # self.policy_net = TempPolicyNet(
+        #     self.n_steps, init_exploration_std=self.init_exploration_std
         # )
-        # self.policy_head = TensorDictModule(
-        #     self.policy_net,
-        #     in_keys=["step_embedding"],
-        #     out_keys=["action"],
+        # self.policy_module = TensorDictModule(
+        #     self.policy_net, in_keys=["step"], out_keys=["action"]
         # )
-        # self.policy_module = TensorDictSequential(
-        #     [self.backbone, self.policy_head],
-        # )
-        self.policy_net = TempPolicyNet(self.n_steps, init_exploration_std=self.init_exploration_std)
-        self.policy_module = TensorDictModule( self.policy_net, in_keys=["step"], out_keys=["action"])
 
         self.state_action_value_net = StateActionValueNet(
             step_embedding_dim=self.step_embedding_dim
@@ -226,17 +224,17 @@ class StepToyEnvTD3Agent(Agent, ABC):
         self.state_action_value_module = TensorDictSequential(
             [self.backbone, self.state_action_value_head],
         )
-        # self.actor_critic = ActorCriticOperator(
-        #     common_operator=self.backbone,
-        #     policy_operator=self.policy_head,
-        #     value_operator=self.state_action_value_head,
-        # )
+        self.actor_critic = ActorCriticOperator(
+            common_operator=self.backbone,
+            policy_operator=self.policy_head,
+            value_operator=self.state_action_value_head,
+        )
 
         self.loss_module = TD3Loss(
-            # actor_network=self.actor_critic.get_policy_operator(),
-            # qvalue_network=self.actor_critic.get_value_head(),
-            actor_network=self.policy_module,
-            qvalue_network=self.state_action_value_module,
+            actor_network=self.actor_critic.get_policy_operator(),
+            qvalue_network=self.actor_critic.get_value_head(),
+            # actor_network=self.policy_module,
+            # qvalue_network=self.state_action_value_module,
             action_spec=self.action_spec,
             num_qvalue_nets=self.num_qvalue_nets,
             policy_noise=self.policy_noise,
@@ -291,21 +289,21 @@ class StepToyEnvTD3Agent(Agent, ABC):
 
     @property
     def backbone_net_params(self):
-        # return self.loss_module.actor_network_params["module"]["0"]
-        return self.loss_module.qvalue_network_params["module"]["0"]
+        return self.loss_module.actor_network_params.get_submodule("module.0")
+        # return self.loss_module.qvalue_network_params["module"]["0"]
 
     @property
     def state_action_value_net_params(self):
-        return self.loss_module.qvalue_network_params["module"]["1"]
+        return self.loss_module.qvalue_network_params
 
     @property
     def target_state_action_value_net_params(self):
-        return self.loss_module.target_qvalue_network_params["module"]["1"]
+        return self.loss_module.target_qvalue_network_params
 
     @property
     def policy_net_params(self):
         # return self.loss_module.actor_network_params["module"]["1"]
-        return self.loss_module.actor_network_params["module"]
+        return self.loss_module.actor_network_params.get_submodule("module.1")
 
     @property
     def policy(self) -> TensorDictModule:
@@ -406,6 +404,40 @@ class StepToyEnvTD3Agent(Agent, ABC):
             ),
         }
 
+    def get_eval_info(self) -> dict[str, Any]:
+        # Return plots of all step embeddings using tSNE
+        steps = (
+            torch.arange(self.n_steps + 1).unsqueeze(-1).to(self.device)
+        )  # (n_steps+1, 1)
+        td = TensorDict(
+            {
+                "step": steps,
+            },
+            batch_size=steps.shape[0],
+        )
+        # Use the first Q-value network to get the step embeddings
+        with torch.no_grad(), self.loss_module.actor_network_params.get_submodule("module.0").to_module(self.backbone):
+            self.backbone(td)
+        step_embeddings = td["step_embedding"] # (n_steps+1, step_embedding_dim)
+        pca = PCA(n_components=2)
+        step_embeddings_2d = pca.fit_transform(step_embeddings.cpu().numpy())
+        # Scatter plot of step embeddings
+        fig, ax = plt.subplots()
+        ax.scatter(
+            step_embeddings_2d[:, 0],
+            step_embeddings_2d[:, 1],
+        )
+        # Annotate each point with its step number
+        for i, step in enumerate(steps.cpu().numpy()):
+            ax.annotate(
+                str(step.item()),
+                (step_embeddings_2d[i, 0], step_embeddings_2d[i, 1]),
+                fontsize=14,
+            )
+        return {
+            "step_embeddings": fig,
+        }
+
     @property
     def device(self) -> torch.device:
         """Get the device of the agent."""
@@ -438,7 +470,7 @@ def get_eval_metrics(td_evals: list[TensorDictBase]) -> dict[str, Any]:
 def main() -> None:
     device = torch.device("cpu")
     batch_size = 64
-    total_frames = 5000 * 64
+    total_frames = 20000 * 64
     # total_frames = 10*64
     n_batches = total_frames // batch_size
 
@@ -451,9 +483,10 @@ def main() -> None:
         step_embedding_dim=5,
         gamma=0.99,
         update_tau=0.01,
-        state_action_value_net_lr=1e-2,
-        backbone_net_lr=1e-3,
-        policy_net_lr=1e-3,
+        state_action_value_net_lr=1e-3,
+        backbone_net_lr=1e-4,
+        policy_net_lr=1e-4,
+        # policy_net_lr=0,
         replay_buffer_size=64,
         replay_buffer_beta_annealing_num_batches=total_frames,
         sub_batch_size=64,
