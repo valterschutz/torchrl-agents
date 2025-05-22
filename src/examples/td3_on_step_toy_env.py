@@ -1,4 +1,7 @@
+from itertools import chain
+from re import A
 from typing import Any
+from torchrl.envs import ExcludeTransform
 from umap import UMAP
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
@@ -14,7 +17,7 @@ from torchrl.modules import (
 from torchrl.objectives import TD3Loss
 from tensordict import TensorDict, TensorDictBase
 from torchrl.objectives import SoftUpdate, ValueEstimators
-from torchrl.data import TensorDictReplayBuffer
+from torchrl.data import SamplerWithoutReplacement, TensorDictReplayBuffer
 from tensordict.nn import TensorDictModule, TensorDictSequential
 from torch import Tensor, nn, optim
 import torch
@@ -66,7 +69,7 @@ class StateActionValueNet(nn.Module):
     def __init__(self, step_embedding_dim: int):
         super().__init__()
         self.step_embedding_dim = step_embedding_dim
-        self.net = MLP(self.step_embedding_dim + 1, 1, num_cells=(32, 32), dropout=0.1)
+        self.net = MLP(self.step_embedding_dim + 1, 1, num_cells=(128, 128), dropout=0.1)
 
     def forward(self, step_embedding: Tensor, action: Tensor) -> Tensor:
         # step_embedding: (batch_size, embedding_dim)
@@ -89,7 +92,7 @@ class TempPolicyNet(nn.Module):
         self.net = MLP(
             self.n_steps + 1,
             1,
-            num_cells=(32, 32),
+            num_cells=(8, 8),
             layer_class=NoisyLinear,
             layer_kwargs={"std_init": self.init_exploration_std},
         )
@@ -174,6 +177,8 @@ class StepToyEnvTD3Agent(Agent, ABC):
     state_action_value_net_lr: float = serializable(default=1e-3)
     policy_net_lr: float = serializable(default=1e-3)
     max_grad_norm: float = serializable(default=1)
+    # actor_network_lr: float = serializable(default=1e-3)
+    # qvalue_network_lr: float = serializable(default=1e-3)
 
     # Replay buffer parameters
     init_frames: int = serializable(default=0)
@@ -199,10 +204,12 @@ class StepToyEnvTD3Agent(Agent, ABC):
     # replay_buffer: ReplayBuffer = field(init=False)
 
     def __post_init__(self) -> None:
-        # self.backbone_net = StepEmbeddingNet(
-        #     num_embeddings=self.n_steps + 1, embedding_dim=self.step_embedding_dim
+        self.backbone_net = StepEmbeddingNet(
+            num_embeddings=self.n_steps + 1, embedding_dim=self.step_embedding_dim
+        )
+        # self.backbone_net = StepBackboneNet(
+        #     n_steps=self.n_steps, embedding_dim=self.step_embedding_dim
         # )
-        self.backbone_net = StepBackboneNet(n_steps=self.n_steps, embedding_dim=self.step_embedding_dim)
         self.backbone = TensorDictModule(
             self.backbone_net,
             in_keys=["step"],
@@ -218,9 +225,9 @@ class StepToyEnvTD3Agent(Agent, ABC):
             in_keys=["step_embedding"],
             out_keys=["action"],
         )
-        self.policy_module = TensorDictSequential(
-            [self.backbone, self.policy_head],
-        )
+        # self.policy_module = TensorDictSequential(
+        #     [self.backbone, self.policy_head],
+        # )
         # self.policy_net = TempPolicyNet(
         #     self.n_steps, init_exploration_std=self.init_exploration_std
         # )
@@ -236,9 +243,9 @@ class StepToyEnvTD3Agent(Agent, ABC):
             in_keys=["step_embedding", "action"],
             out_keys=["state_action_value"],
         )
-        self.state_action_value_module = TensorDictSequential(
-            [self.backbone, self.state_action_value_head],
-        )
+        # self.state_action_value_module = TensorDictSequential(
+        #     [self.backbone, self.state_action_value_head],
+        # )
         self.actor_critic = ActorCriticOperator(
             common_operator=self.backbone,
             policy_operator=self.policy_head,
@@ -248,6 +255,7 @@ class StepToyEnvTD3Agent(Agent, ABC):
         self.loss_module = TD3Loss(
             actor_network=self.actor_critic.get_policy_operator(),
             qvalue_network=self.actor_critic.get_value_head(),
+            # qvalue_network=self.actor_critic.get_critic_operator(),
             # actor_network=self.policy_module,
             # qvalue_network=self.state_action_value_module,
             action_spec=self.action_spec,
@@ -259,9 +267,7 @@ class StepToyEnvTD3Agent(Agent, ABC):
         )
         self.loss_module.make_value_estimator(ValueEstimators.TD0, gamma=self.gamma)
         self.target_net_updater = SoftUpdate(self.loss_module, tau=self.update_tau)
-        self.loss_keys = ["loss_qvalue"]
-        if self.policy_net_lr > 0:
-            self.loss_keys.append("loss_actor")
+        self.loss_keys = ["loss_qvalue", "loss_actor"]
 
         # Optimizers for each network
         self.backbone_net_optimizer = optim.Adam(
@@ -277,6 +283,14 @@ class StepToyEnvTD3Agent(Agent, ABC):
         self.policy_net_optimizer = optim.Adam(
             self.policy_net_params, lr=self.policy_net_lr
         )
+        # self.actor_network_optimizer = optim.Adam(
+        #     self.loss_module.actor_network_params.flatten_keys().values(),
+        #     lr=self.actor_network_lr,
+        # )
+        # self.qvalue_network_optimizer = optim.Adam(
+        #     self.loss_module.qvalue_network_params.flatten_keys().values(),
+        #     lr=self.qvalue_network_lr,
+        # )
         # self.total_optimizer = optim.Adam(
         #     self.loss_module.parameters(), lr=1e-4
         # )
@@ -298,6 +312,7 @@ class StepToyEnvTD3Agent(Agent, ABC):
                 alpha=self.replay_buffer_alpha,
                 beta=self.replay_buffer_beta_init,
             ),
+            # sampler=SamplerWithoutReplacement(),
             priority_key="td_error",
             batch_size=self.sub_batch_size,
         )
@@ -332,7 +347,8 @@ class StepToyEnvTD3Agent(Agent, ABC):
 
     @property
     def policy(self) -> TensorDictModule:
-        return self.loss_module.actor_network
+        # return self.loss_module.actor_network
+        return self.actor_critic.get_policy_operator()
         # return self.policy_module
 
     def _anneal_replay_buffer_beta(self) -> None:
@@ -364,7 +380,6 @@ class StepToyEnvTD3Agent(Agent, ABC):
             for k in self.loss_keys:
                 process_info_dict[k] += loss_td[k].item()
 
-            process_info_dict["td_error"] = loss_td["td_error"].mean().item()
 
         # Anneal beta for prioritized sampling
         self._anneal_replay_buffer_beta()
@@ -374,10 +389,13 @@ class StepToyEnvTD3Agent(Agent, ABC):
             k: v / self.num_samples for k, v in process_info_dict.items()
         }
 
-        with torch.no_grad():
-            self.loss_module.qvalue_network(td)
-            process_info_dict["Advantage?"] = td["state_action_value"].detach().cpu()
+        # with torch.no_grad():
+        #     self.loss_module.qvalue_network(td)
+        #     process_info_dict["Advantage?"] = td["state_action_value"].detach().cpu()
 
+        process_info_dict["td_error"] = loss_td["td_error"].mean().item()
+        process_info_dict["target_value"] = loss_td["target_value"].mean().item()
+        process_info_dict["sample_weights"] = wandb.Histogram(loss_td["sample_weights"].cpu())
         process_info_dict["action"] = td["action"].detach().cpu()
         process_info_dict["step"] = td["step"].detach().cpu()
 
@@ -388,37 +406,34 @@ class StepToyEnvTD3Agent(Agent, ABC):
         td = self.replay_buffer.sample()
         td = td.to(self.device)
 
-        # Value loss first
-        self.state_action_value_net_optimizer.zero_grad()
-        value_loss, value_loss_metadata = self.loss_module.value_loss(td)
-        value_loss.backward()
-        # nn.utils.clip_grad_norm_(
-        #     self.loss_module.parameters(), max_norm=self.max_grad_norm
-        # )
-        self.state_action_value_net_optimizer.step()
+        loss_td = self.loss_module(td)
 
-        # Policy loss
-        self.backbone_net_optimizer.zero_grad()
-        self.policy_net_optimizer.zero_grad()
-        actor_loss, actor_loss_metadata = self.loss_module.actor_loss(td)
-        actor_loss.backward()
-        self.backbone_net_optimizer.step()
-        self.policy_net_optimizer.step()
+        for optimizer in self.optimizers:
+            optimizer.zero_grad()
+        loss = sum(loss_td[k] for k in self.loss_keys)
+        loss.backward()
+        nn.utils.clip_grad_norm_(
+            self.loss_module.parameters(), max_norm=self.max_grad_norm
+        )
+        for optimizer in self.optimizers:
+            optimizer.step()
 
         # Update target network
         self.target_net_updater.step()
 
         # Add td error to the TensorDict so we can update priorities
         # Average over all Q-value networks
-        td["td_error"] = value_loss_metadata["td_error"].detach().mean(dim=0)
+        # td["td_error"] = value_loss_metadata["td_error"].detach().mean(dim=0)
 
         # Update priorities in the replay buffer
         self.replay_buffer.update_tensordict_priority(td)  # type: ignore
 
-        loss_td = TensorDict({}, batch_size=())
-        loss_td["loss_qvalue"] = value_loss.detach()
-        loss_td["loss_actor"] = actor_loss.detach()
-        loss_td["td_error"] = value_loss_metadata["td_error"].detach()
+        # loss_td = TensorDict({}, batch_size=())
+        # loss_td["loss_qvalue"] = value_loss.detach()
+        # loss_td["loss_actor"] = actor_loss.detach()
+        # loss_td["td_error"] = value_loss_metadata["td_error"].detach()
+        loss_td["td_error"] = td["td_error"].detach()
+        loss_td["sample_weights"] = td["_weight"].detach()
 
         return loss_td
 
@@ -486,13 +501,13 @@ class StepToyEnvTD3Agent(Agent, ABC):
 
     def eval(self) -> None:
         """Set the agent to evaluation mode."""
-        # self.actor_critic.eval()
-        self.policy_module.eval()
+        self.actor_critic.eval()
+        # self.policy_module.eval()
 
     def train(self) -> None:
         """Set the agent to evaluation mode."""
-        # self.actor_critic.train()
-        self.policy_module.train()
+        self.actor_critic.train()
+        # self.policy_module.train()
 
 
 def get_eval_metrics(td_evals: list[TensorDictBase]) -> dict[str, Any]:
@@ -517,12 +532,14 @@ def main() -> None:
         n_steps=5,
         step_embedding_dim=5,
         gamma=0.99,
-        update_tau=0.001,
-        state_action_value_net_lr=1e-3,
-        backbone_net_lr=1e-4,
+        update_tau=0.01,
+        backbone_net_lr=1e-5,
         policy_net_lr=1e-5,
-        # policy_net_lr=0,
-        replay_buffer_size=100000,
+        state_action_value_net_lr=1e-4,
+        replay_buffer_size=64*1000,
+        replay_buffer_alpha=0.6,
+        replay_buffer_beta_init=0.4,
+        replay_buffer_beta_end=0.4,
         replay_buffer_beta_annealing_num_batches=total_frames,
         sub_batch_size=64,
         num_samples=10,
@@ -530,7 +547,7 @@ def main() -> None:
         loss_function="l2",
         policy_noise=0.05,
         noise_clip=0.1,
-        init_exploration_std=1,
+        init_exploration_std=0.5,
         separate_losses=False,
         init_frames=0,
     )
@@ -545,6 +562,7 @@ def main() -> None:
         policy=agent.policy,
         frames_per_batch=batch_size,
         total_frames=total_frames,
+        # postproc=ExcludeTransform("step_embedding")
     )
 
     run = wandb.init()
