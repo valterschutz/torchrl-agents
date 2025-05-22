@@ -48,6 +48,20 @@ class StepEmbeddingNet(nn.Module):
         )
 
 
+class StepBackboneNet(nn.Module):
+    def __init__(self, n_steps, embedding_dim: int):
+        super().__init__()
+        self.n_steps = n_steps
+        self.embedding_dim = embedding_dim
+
+        self.net = MLP(self.n_steps + 1, self.embedding_dim, num_cells=(32, 32))
+
+    def forward(self, step: Tensor) -> Tensor:
+        # step: (batch_size, 1)
+        step = F.one_hot(step.squeeze(-1), num_classes=self.n_steps + 1).float()
+        return self.net(step)  # (batch_size, embedding_dim)
+
+
 class StateActionValueNet(nn.Module):
     def __init__(self, step_embedding_dim: int):
         super().__init__()
@@ -185,9 +199,10 @@ class StepToyEnvTD3Agent(Agent, ABC):
     # replay_buffer: ReplayBuffer = field(init=False)
 
     def __post_init__(self) -> None:
-        self.backbone_net = StepEmbeddingNet(
-            num_embeddings=self.n_steps + 1, embedding_dim=self.step_embedding_dim
-        )
+        # self.backbone_net = StepEmbeddingNet(
+        #     num_embeddings=self.n_steps + 1, embedding_dim=self.step_embedding_dim
+        # )
+        self.backbone_net = StepBackboneNet(n_steps=self.n_steps, embedding_dim=self.step_embedding_dim)
         self.backbone = TensorDictModule(
             self.backbone_net,
             in_keys=["step"],
@@ -250,17 +265,17 @@ class StepToyEnvTD3Agent(Agent, ABC):
 
         # Optimizers for each network
         self.backbone_net_optimizer = optim.Adam(
-            self.backbone_net_params.values(True, True), lr=self.backbone_net_lr
+            self.backbone_net_params, lr=self.backbone_net_lr
         )
         # def backbone_normalize_hook(optimizer, *args, **kwargs):
-        #     self.backbone_net.normalize_weights()
+        #     self.loss_module.actor_network.get_submodule("module.0.module").normalize_weights()
         # self.backbone_net_optimizer.register_step_post_hook(backbone_normalize_hook)
         self.state_action_value_net_optimizer = optim.Adam(
-            self.state_action_value_net_params.values(True, True),
+            self.state_action_value_net_params,
             lr=self.state_action_value_net_lr,
         )
         self.policy_net_optimizer = optim.Adam(
-            self.policy_net_params.values(True, True), lr=self.policy_net_lr
+            self.policy_net_params, lr=self.policy_net_lr
         )
         # self.total_optimizer = optim.Adam(
         #     self.loss_module.parameters(), lr=1e-4
@@ -289,26 +304,36 @@ class StepToyEnvTD3Agent(Agent, ABC):
 
     @property
     def backbone_net_params(self):
-        return self.loss_module.actor_network_params.get_submodule("module.0")
+        return list(
+            self.loss_module.actor_network_params.get_submodule("module.0")
+            .flatten_keys()
+            .values()
+        )
         # return self.loss_module.qvalue_network_params["module"]["0"]
 
     @property
     def state_action_value_net_params(self):
-        return self.loss_module.qvalue_network_params
+        return list(self.loss_module.qvalue_network_params.flatten_keys().values())
 
     @property
     def target_state_action_value_net_params(self):
-        return self.loss_module.target_qvalue_network_params
+        return list(
+            self.loss_module.target_qvalue_network_params.flatten_keys().values()
+        )
 
     @property
     def policy_net_params(self):
         # return self.loss_module.actor_network_params["module"]["1"]
-        return self.loss_module.actor_network_params.get_submodule("module.1")
+        return list(
+            self.loss_module.actor_network_params.get_submodule("module.1")
+            .flatten_keys()
+            .values()
+        )
 
     @property
     def policy(self) -> TensorDictModule:
-        # return self.actor_critic.get_policy_operator()
-        return self.policy_module
+        return self.loss_module.actor_network
+        # return self.policy_module
 
     def _anneal_replay_buffer_beta(self) -> None:
         """Anneal the beta parameter for prioritized sampling."""
@@ -363,45 +388,50 @@ class StepToyEnvTD3Agent(Agent, ABC):
         td = self.replay_buffer.sample()
         td = td.to(self.device)
 
-        for optimizer in self.optimizers:
-            optimizer.zero_grad()
-        loss_td: TensorDictBase = self.loss_module(td)
-        loss_tensor: Tensor = sum(
-            (loss_td[k] for k in self.loss_keys), torch.tensor(0.0, device=td.device)
-        )
-        loss_tensor.backward()
-        nn.utils.clip_grad_norm_(
-            self.loss_module.parameters(), max_norm=self.max_grad_norm
-        )
-        for optimizer in self.optimizers:
-            optimizer.step()
+        # Value loss first
+        self.state_action_value_net_optimizer.zero_grad()
+        value_loss, value_loss_metadata = self.loss_module.value_loss(td)
+        value_loss.backward()
+        # nn.utils.clip_grad_norm_(
+        #     self.loss_module.parameters(), max_norm=self.max_grad_norm
+        # )
+        self.state_action_value_net_optimizer.step()
+
+        # Policy loss
+        self.backbone_net_optimizer.zero_grad()
+        self.policy_net_optimizer.zero_grad()
+        actor_loss, actor_loss_metadata = self.loss_module.actor_loss(td)
+        actor_loss.backward()
+        self.backbone_net_optimizer.step()
+        self.policy_net_optimizer.step()
 
         # Update target network
         self.target_net_updater.step()
 
+        # Add td error to the TensorDict so we can update priorities
+        # Average over all Q-value networks
+        td["td_error"] = value_loss_metadata["td_error"].detach().mean(dim=0)
+
         # Update priorities in the replay buffer
         self.replay_buffer.update_tensordict_priority(td)  # type: ignore
 
-        # Loss module also writes a td_error key which is useful for logging
-        loss_td["td_error"] = td["td_error"]
+        loss_td = TensorDict({}, batch_size=())
+        loss_td["loss_qvalue"] = value_loss.detach()
+        loss_td["loss_actor"] = actor_loss.detach()
+        loss_td["td_error"] = value_loss_metadata["td_error"].detach()
 
         return loss_td
 
     def get_train_info(self) -> dict[str, Any]:
         return {
-            "backbone_net_norm": sum(
-                p.norm() for p in self.backbone_net_params.values(True, True)
-            ),
+            "backbone_net_norm": sum(p.norm() for p in self.backbone_net_params),
             "state_action_value_net_norm": sum(
-                p.norm() for p in self.state_action_value_net_params.values(True, True)
+                p.norm() for p in self.state_action_value_net_params
             ),
             "target_state_action_value_net_norm": sum(
-                p.norm()
-                for p in self.target_state_action_value_net_params.values(True, True)
+                p.norm() for p in self.target_state_action_value_net_params
             ),
-            "policy_net_norm": sum(
-                p.norm() for p in self.policy_net_params.values(True, True)
-            ),
+            "policy_net_norm": sum(p.norm() for p in self.policy_net_params),
         }
 
     def get_eval_info(self) -> dict[str, Any]:
@@ -416,9 +446,14 @@ class StepToyEnvTD3Agent(Agent, ABC):
             batch_size=steps.shape[0],
         )
         # Use the first Q-value network to get the step embeddings
-        with torch.no_grad(), self.loss_module.actor_network_params.get_submodule("module.0").to_module(self.backbone):
+        with (
+            torch.no_grad(),
+            self.loss_module.actor_network_params.get_submodule("module.0").to_module(
+                self.backbone
+            ),
+        ):
             self.backbone(td)
-        step_embeddings = td["step_embedding"] # (n_steps+1, step_embedding_dim)
+        step_embeddings = td["step_embedding"]  # (n_steps+1, step_embedding_dim)
         pca = PCA(n_components=2)
         step_embeddings_2d = pca.fit_transform(step_embeddings.cpu().numpy())
         # Scatter plot of step embeddings
@@ -470,7 +505,7 @@ def get_eval_metrics(td_evals: list[TensorDictBase]) -> dict[str, Any]:
 def main() -> None:
     device = torch.device("cpu")
     batch_size = 64
-    total_frames = 20000 * 64
+    total_frames = 100000 * 64
     # total_frames = 10*64
     n_batches = total_frames // batch_size
 
@@ -482,15 +517,15 @@ def main() -> None:
         n_steps=5,
         step_embedding_dim=5,
         gamma=0.99,
-        update_tau=0.01,
+        update_tau=0.001,
         state_action_value_net_lr=1e-3,
         backbone_net_lr=1e-4,
-        policy_net_lr=1e-4,
+        policy_net_lr=1e-5,
         # policy_net_lr=0,
-        replay_buffer_size=64,
+        replay_buffer_size=100000,
         replay_buffer_beta_annealing_num_batches=total_frames,
         sub_batch_size=64,
-        num_samples=1,
+        num_samples=10,
         num_qvalue_nets=2,  # TODO: 2 is the default
         loss_function="l2",
         policy_noise=0.05,
